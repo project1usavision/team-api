@@ -320,14 +320,23 @@ app.post('/api/auth/login', async (req, res) => {
       email: email.toLowerCase().trim(), password
     });
 
-    if (authError || !authData?.user)
+    if (authError || !authData?.user) {
+      console.log('[Login] Auth failed:', authError?.message);
       return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    // Use the verified email from Supabase Auth (avoids case/whitespace issues)
+    const verifiedEmail = authData.user.email;
+    console.log('[Login] Auth success for:', verifiedEmail);
 
     const { data: adminUser, error: adminError } = await supabase
-      .from('admin_users').select('*').eq('email', email.toLowerCase().trim()).single();
+      .from('admin_users').select('*').eq('email', verifiedEmail).single();
 
-    if (adminError || !adminUser)
+    if (adminError || !adminUser) {
+      console.log('[Login] Admin user not found for email:', verifiedEmail);
+      console.log('[Login] adminError:', adminError?.message);
       return res.status(401).json({ error: 'Account not found. Contact Jose.' });
+    }
     if (!adminUser.is_active)
       return res.status(403).json({ error: 'Account deactivated. Contact Jose.' });
 
