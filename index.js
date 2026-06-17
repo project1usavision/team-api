@@ -110,8 +110,10 @@ async function sendDiscordNotification(submission) {
     }]
   };
 
+  // Normalize URL — use discord.com (discordapp.com is deprecated)
+  const normalizedWebhook = WEBHOOK.replace('discordapp.com', 'discord.com');
   return new Promise((resolve) => {
-    const parsed  = urlLib.parse(WEBHOOK);
+    const parsed  = urlLib.parse(normalizedWebhook);
     const payload = JSON.stringify(embed);
     const opts    = {
       hostname: parsed.hostname,
