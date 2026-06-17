@@ -16,6 +16,9 @@ const { Resend }         = require('resend');
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
+// Trust Vercel's proxy
+app.set('trust proxy', 1);
+
 // ── Supabase client ──
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -223,9 +226,17 @@ app.post('/api/submit/individual', submitLimiter, async (req, res) => {
       return res.status(500).json({ error: 'Failed to save. Please try again.' });
     }
 
-    sendDiscordNotification(data).catch(console.error);
-    sendTeamEmail(data).catch(console.error);
-    sendConfirmationEmail(data).catch(console.error);
+    // Fire notifications async — don't block the response
+    Promise.allSettled([
+      sendDiscordNotification(data),
+      sendTeamEmail(data),
+      sendConfirmationEmail(data)
+    ]).then(results => {
+      results.forEach((r, i) => {
+        const name = ['Discord','Email-Team','Email-Confirm'][i];
+        console.log(`[${name}]`, r.status === 'fulfilled' ? 'sent' : r.reason?.message);
+      });
+    });
 
     return res.status(201).json({
       success: true,
@@ -274,9 +285,16 @@ app.post('/api/submit/partner', submitLimiter, async (req, res) => {
       return res.status(500).json({ error: 'Failed to save. Please try again.' });
     }
 
-    sendDiscordNotification(data).catch(console.error);
-    sendTeamEmail(data).catch(console.error);
-    sendConfirmationEmail(data).catch(console.error);
+    Promise.allSettled([
+      sendDiscordNotification(data),
+      sendTeamEmail(data),
+      sendConfirmationEmail(data)
+    ]).then(results => {
+      results.forEach((r, i) => {
+        const name = ['Discord','Email-Team','Email-Confirm'][i];
+        console.log(`[${name}]`, r.status === 'fulfilled' ? 'sent' : r.reason?.message);
+      });
+    });
 
     return res.status(201).json({
       success: true,
