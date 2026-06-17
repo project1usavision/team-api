@@ -227,16 +227,15 @@ app.post('/api/submit/individual', submitLimiter, async (req, res) => {
     }
 
     console.log('[Submit Individual] Saved to DB, firing notifications...');
-    // Fire notifications async — don't block the response
-    Promise.allSettled([
+    // AWAIT notifications before responding — Vercel cuts off after response
+    const notifResults = await Promise.allSettled([
       sendDiscordNotification(data),
       sendTeamEmail(data),
       sendConfirmationEmail(data)
-    ]).then(results => {
-      results.forEach((r, i) => {
-        const name = ['Discord','Email-Team','Email-Confirm'][i];
-        console.log(`[${name}]`, r.status === 'fulfilled' ? 'sent' : r.reason?.message);
-      });
+    ]);
+    notifResults.forEach((r, i) => {
+      const name = ['Discord','Email-Team','Email-Confirm'][i];
+      console.log(`[${name}]`, r.status === 'fulfilled' ? 'sent ✅' : 'failed: ' + r.reason?.message);
     });
 
     return res.status(201).json({
@@ -286,15 +285,15 @@ app.post('/api/submit/partner', submitLimiter, async (req, res) => {
       return res.status(500).json({ error: 'Failed to save. Please try again.' });
     }
 
-    Promise.allSettled([
+    // AWAIT notifications before responding — Vercel cuts off after response
+    const notifResults2 = await Promise.allSettled([
       sendDiscordNotification(data),
       sendTeamEmail(data),
       sendConfirmationEmail(data)
-    ]).then(results => {
-      results.forEach((r, i) => {
-        const name = ['Discord','Email-Team','Email-Confirm'][i];
-        console.log(`[${name}]`, r.status === 'fulfilled' ? 'sent' : r.reason?.message);
-      });
+    ]);
+    notifResults2.forEach((r, i) => {
+      const name = ['Discord','Email-Team','Email-Confirm'][i];
+      console.log(`[${name}]`, r.status === 'fulfilled' ? 'sent ✅' : 'failed: ' + r.reason?.message);
     });
 
     return res.status(201).json({
