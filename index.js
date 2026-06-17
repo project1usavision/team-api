@@ -502,6 +502,29 @@ app.get('/api/admin/logs', requireAuth, requireSuperAdmin, async (req, res) => {
 // ============================================================
 // ERROR HANDLERS
 // ============================================================
+
+// ── TEST ENDPOINT — remove after debugging ──
+app.get('/api/test-discord', async (req, res) => {
+  const testSub = {
+    type: 'skilled_individual',
+    full_name: 'Test User',
+    email: 'test@test.com',
+    phone: '09123456789',
+    skill_category: 'Web / App Development',
+    about_yourself: 'This is a test notification from TEAM | ProjectOneUSA API'
+  };
+  try {
+    console.log('[Test] Firing Discord notification...');
+    await sendDiscordNotification(testSub);
+    console.log('[Test] Firing team email...');
+    await sendTeamEmail(testSub);
+    return res.json({ success: true, message: 'Test notifications fired — check Discord and email.' });
+  } catch (err) {
+    console.error('[Test] Error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.use((req, res) => res.status(404).json({ error: 'Route not found.' }));
 app.use((err, req, res, next) => {
   console.error('[ERROR]', err);
