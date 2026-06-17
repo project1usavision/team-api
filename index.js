@@ -47,7 +47,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 
 const submitLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, max: 5,
+  windowMs: 5 * 60 * 1000, max: 50, // relaxed for testing
   message: { error: 'Too many submissions. Please try again later.' }
 });
 
@@ -82,13 +82,13 @@ function requireSuperAdmin(req, res, next) {
 // ============================================================
 async function sendDiscordNotification(submission) {
   const WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
-  if (!WEBHOOK) return;
+  if (!WEBHOOK) { console.log('[Discord] No webhook URL set'); return; }
 
   const isPartner = submission.type === 'business_partner';
   const color     = isPartner ? 0xFFD000 : 0x26C7D9;
   const typeLabel = isPartner ? '🤝 Business Partner' : '🎯 Skilled Individual';
 
-  const embed = {
+  const body = JSON.stringify({
     embeds: [{
       title:     `🔔 New Submission — ${typeLabel}`,
       color,
@@ -99,39 +99,36 @@ async function sendDiscordNotification(submission) {
         { name: '📧 Email',     value: submission.email    || '—', inline: true },
         { name: '📱 Phone',     value: submission.phone    || 'Not provided', inline: true },
         ...(isPartner ? [
-          { name: '🏢 Business',    value: submission.business_name     || '—', inline: true },
-          { name: '🎯 Division',    value: submission.division_interest  || '—', inline: true },
-          { name: '💼 Opportunity', value: (submission.opportunity_desc  || '—').substring(0, 200), inline: false }
+          { name: '🏢 Business',    value: submission.business_name    || '—', inline: true },
+          { name: '🎯 Division',    value: submission.division_interest || '—', inline: true },
+          { name: '💼 Opportunity', value: (submission.opportunity_desc || '—').substring(0, 200), inline: false }
         ] : [
-          { name: '🎨 Skill', value: submission.skill_category   || '—', inline: true },
-          { name: '📝 About', value: (submission.about_yourself  || '—').substring(0, 200), inline: false }
+          { name: '🎨 Skill', value: submission.skill_category  || '—', inline: true },
+          { name: '📝 About', value: (submission.about_yourself || '—').substring(0, 200), inline: false }
         ])
       ]
     }]
-  };
-
-  // Normalize URL — use discord.com (discordapp.com is deprecated)
-  const normalizedWebhook = WEBHOOK.replace('discordapp.com', 'discord.com');
-  return new Promise((resolve) => {
-    const parsed  = urlLib.parse(normalizedWebhook);
-    const payload = JSON.stringify(embed);
-    const opts    = {
-      hostname: parsed.hostname,
-      path:     parsed.path,
-      method:   'POST',
-      headers:  {
-        'Content-Type':   'application/json',
-        'Content-Length': Buffer.byteLength(payload)
-      }
-    };
-    const req = https.request(opts, (res) => {
-      res.on('data', () => {});
-      res.on('end', () => { console.log('[Discord] Sent ✅'); resolve(true); });
-    });
-    req.on('error', () => resolve(false));
-    req.write(payload);
-    req.end();
   });
+
+  const webhookUrl = WEBHOOK.replace('discordapp.com', 'discord.com');
+  console.log('[Discord] Sending to:', webhookUrl.substring(0, 60) + '...');
+
+  try {
+    const res = await fetch(webhookUrl, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body
+    });
+    console.log('[Discord] Response status:', res.status);
+    if (res.ok) {
+      console.log('[Discord] ✅ Sent successfully');
+    } else {
+      const text = await res.text();
+      console.error('[Discord] ❌ Failed:', res.status, text);
+    }
+  } catch (err) {
+    console.error('[Discord] ❌ Error:', err.message);
+  }
 }
 
 // ============================================================
@@ -200,6 +197,7 @@ app.get('/api/health', (req, res) => {
 // ============================================================
 app.post('/api/submit/individual', submitLimiter, async (req, res) => {
   try {
+    console.log('[Submit Individual] Received request');
     const { full_name, email, phone, skill_category, about_yourself } = req.body;
 
     if (!full_name?.trim())
@@ -228,6 +226,7 @@ app.post('/api/submit/individual', submitLimiter, async (req, res) => {
       return res.status(500).json({ error: 'Failed to save. Please try again.' });
     }
 
+    console.log('[Submit Individual] Saved to DB, firing notifications...');
     // Fire notifications async — don't block the response
     Promise.allSettled([
       sendDiscordNotification(data),
