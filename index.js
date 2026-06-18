@@ -329,21 +329,26 @@ app.post('/api/auth/login', async (req, res) => {
     const verifiedEmail = authData.user.email;
     console.log('[Login] Auth success for:', verifiedEmail);
 
-    // Try to fetch admin user
-    const { data: adminUser, error: adminError } = await supabase
-      .from('admin_users').select('*').eq('email', verifiedEmail).single();
+    // Fetch admin user — using ilike to handle any case issues
+    const { data: allAdmins, error: listError } = await supabase
+      .from('admin_users')
+      .select('*');
 
-    console.log('[Login] adminUser:', JSON.stringify(adminUser));
-    console.log('[Login] adminError:', JSON.stringify(adminError));
+    console.log('[Login] All admins fetched:', JSON.stringify(allAdmins));
+    console.log('[Login] List error:', JSON.stringify(listError));
+    console.log('[Login] Looking for email:', verifiedEmail);
 
-    // If not found by auth email, try listing all admin users
-    if (adminError || !adminUser) {
-      const { data: allUsers } = await supabase.from('admin_users').select('email, role');
-      console.log('[Login] All admin_users:', JSON.stringify(allUsers));
-      return res.status(401).json({ 
+    const adminUser = allAdmins?.find(u =>
+      u.email.toLowerCase().trim() === verifiedEmail.toLowerCase().trim()
+    );
+
+    console.log('[Login] Matched admin:', JSON.stringify(adminUser));
+
+    if (!adminUser) {
+      return res.status(401).json({
         error: 'Account not found. Contact Jose.',
-        debug_email: verifiedEmail,
-        debug_all: allUsers
+        debug_verified: verifiedEmail,
+        debug_all: allAdmins?.map(u => u.email)
       });
     }
     if (!adminUser.is_active)
@@ -401,70 +406,11 @@ app.get('/api/admin/stats', requireAuth, async (req, res) => {
 // ============================================================
 // ROUTES — ADMIN SUBMISSIONS
 // ============================================================
-app.get('/api/admin/submissions/export/csv', requireAuth, async (req, res) => {
-  try {
-    const { data, error } = await supabase.from('submissions').select('*').order('created_at', { ascending: false });
-    if (error) throw error;
-    const headers = ['id','type','full_name','email','phone','skill_category','about_yourself','business_name','division_interest','opportunity_desc','status','created_at'];
-    const rows    = data.map(row => headers.map(h => `"${String(row[h] ?? '').replace(/"/g,'""')}"`).join(','));
-    const csv     = [headers.join(','), ...rows].join('\n');
-    await supabase.from('audit_logs').insert({ admin_id: req.user.id, admin_name: req.user.name, action: 'EXPORT_CSV', details: { count: data.length } });
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="team-submissions-${Date.now()}.csv"`);
-    return res.send(csv);
-  } catch (e) { return res.status(500).json({ error: 'Failed to export.' }); }
-});
 
-app.get('/api/admin/submissions/:id', requireAuth, async (req, res) => {
-  try {
-    const [{ data: sub, error: subErr }, { data: notes }] = await Promise.all([
-      supabase.from('submissions').select('*').eq('id', req.params.id).single(),
-      supabase.from('admin_notes').select('*').eq('submission_id', req.params.id).order('created_at', { ascending: true })
-    ]);
-    if (subErr) return res.status(404).json({ error: 'Submission not found.' });
-    return res.json({ submission: sub, notes: notes || [] });
-  } catch (e) { return res.status(500).json({ error: 'Failed to fetch.' }); }
-});
 
-app.get('/api/admin/submissions', requireAuth, async (req, res) => {
-  try {
-    const { type, status, search, page = 1, limit = 20 } = req.query;
-    let query = supabase.from('submissions').select('*', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .range((page - 1) * limit, page * limit - 1);
-    if (type)   query = query.eq('type', type);
-    if (status) query = query.eq('status', status);
-    if (search) query = query.or(`full_name.ilike.%${search}%,email.ilike.%${search}%,business_name.ilike.%${search}%`);
-    const { data, error, count } = await query;
-    if (error) throw error;
-    return res.json({ submissions: data, total: count, page: Number(page), pages: Math.ceil(count / limit) });
-  } catch (e) { return res.status(500).json({ error: 'Failed to fetch submissions.' }); }
-});
 
-app.patch('/api/admin/submissions/:id/status', requireAuth, async (req, res) => {
-  try {
-    const { status } = req.body;
-    const valid = ['new','reviewed','contacted','accepted','rejected'];
-    if (!valid.includes(status)) return res.status(400).json({ error: 'Invalid status.' });
-    const { data, error } = await supabase.from('submissions').update({ status }).eq('id', req.params.id).select().single();
-    if (error) throw error;
-    await supabase.from('audit_logs').insert({ admin_id: req.user.id, admin_name: req.user.name, action: 'UPDATE_STATUS', target_id: req.params.id, details: { new_status: status } });
-    return res.json({ success: true, submission: data });
-  } catch (e) { return res.status(500).json({ error: 'Failed to update status.' }); }
-});
 
-app.delete('/api/admin/submissions/:id', requireAuth, requireSuperAdmin, async (req, res) => {
-  try {
-    const { error } = await supabase.from('submissions').delete().eq('id', req.params.id);
-    if (error) throw error;
-    await supabase.from('audit_logs').insert({ admin_id: req.user.id, admin_name: req.user.name, action: 'DELETE_SUBMISSION', target_id: req.params.id });
-    return res.json({ success: true });
-  } catch (e) { return res.status(500).json({ error: 'Failed to delete.' }); }
-});
 
-// ============================================================
-// ROUTES — ADMIN NOTES
-// ============================================================
 app.post('/api/admin/notes', requireAuth, async (req, res) => {
   try {
     const { submission_id, note } = req.body;
@@ -550,3 +496,64 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => console.log(`✅ TEAM | ProjectOneUSA API running on port ${PORT}`));
 module.exports = app;
+// ── ADMIN — SUBMISSIONS ──
+app.get('/api/admin/submissions', requireAuth, async (req, res) => {
+  try {
+    const { type, status, search, page = 1, limit = 20 } = req.query;
+    let query = supabase.from('submissions').select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range((page - 1) * limit, page * limit - 1);
+    if (type)   query = query.eq('type', type);
+    if (status) query = query.eq('status', status);
+    if (search) query = query.or(`full_name.ilike.%${search}%,email.ilike.%${search}%,business_name.ilike.%${search}%`);
+    const { data, error, count } = await query;
+    if (error) throw error;
+    return res.json({ submissions: data, total: count, page: Number(page), pages: Math.ceil(count / limit) });
+  } catch (e) { return res.status(500).json({ error: 'Failed to fetch submissions.' }); }
+});
+app.get('/api/admin/submissions/export/csv', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('submissions').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    const headers = ['id','type','full_name','email','phone','skill_category','about_yourself','business_name','division_interest','opportunity_desc','status','created_at'];
+    const rows    = data.map(row => headers.map(h => `"${String(row[h] ?? '').replace(/"/g,'""')}"`).join(','));
+    const csv     = [headers.join(','), ...rows].join('\n');
+    await supabase.from('audit_logs').insert({ admin_id: req.user.id, admin_name: req.user.name, action: 'EXPORT_CSV', details: { count: data.length } });
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="team-submissions-${Date.now()}.csv"`);
+    return res.send(csv);
+  } catch (e) { return res.status(500).json({ error: 'Failed to export.' }); }
+});
+app.get('/api/admin/submissions/:id', requireAuth, async (req, res) => {
+  try {
+    const [{ data: sub, error: subErr }, { data: notes }] = await Promise.all([
+      supabase.from('submissions').select('*').eq('id', req.params.id).single(),
+      supabase.from('admin_notes').select('*').eq('submission_id', req.params.id).order('created_at', { ascending: true })
+    ]);
+    if (subErr) return res.status(404).json({ error: 'Submission not found.' });
+    return res.json({ submission: sub, notes: notes || [] });
+  } catch (e) { return res.status(500).json({ error: 'Failed to fetch.' }); }
+});
+app.patch('/api/admin/submissions/:id/status', requireAuth, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const valid = ['new','reviewed','contacted','accepted','rejected'];
+    if (!valid.includes(status)) return res.status(400).json({ error: 'Invalid status.' });
+    const { data, error } = await supabase.from('submissions').update({ status }).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    await supabase.from('audit_logs').insert({ admin_id: req.user.id, admin_name: req.user.name, action: 'UPDATE_STATUS', target_id: req.params.id, details: { new_status: status } });
+    return res.json({ success: true, submission: data });
+  } catch (e) { return res.status(500).json({ error: 'Failed to update status.' }); }
+});
+app.delete('/api/admin/submissions/:id', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const { error } = await supabase.from('submissions').delete().eq('id', req.params.id);
+    if (error) throw error;
+    await supabase.from('audit_logs').insert({ admin_id: req.user.id, admin_name: req.user.name, action: 'DELETE_SUBMISSION', target_id: req.params.id });
+    return res.json({ success: true });
+  } catch (e) { return res.status(500).json({ error: 'Failed to delete.' }); }
+});
+
+// ============================================================
+// ROUTES — ADMIN NOTES
+// ============================================================
